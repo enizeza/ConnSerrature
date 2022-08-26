@@ -1,3 +1,10 @@
+/*
+Eni Zeza
+Winsock doc https://docs.microsoft.com/it-it/windows/win32/winsock/complete-client-code
+nlohmann json library https://github.com/nlohmann/json
+cpr library wrapper libcurl HTTP connection https://github.com/libcpr/cpr
+*/
+
 using namespace std;
 
 #define _WIN32_WINNT 0x501
@@ -36,6 +43,7 @@ int __cdecl main(int argc, char** argv)
         * ptr = NULL,
         hints;
 
+    // IP centralina serrature
     const char* address = "192.168.2.99";
 
     char recvbuf[DEFAULT_BUFLEN];
@@ -43,6 +51,7 @@ int __cdecl main(int argc, char** argv)
     int n;
     int recvbuflen = DEFAULT_BUFLEN;
 
+    // Inizializzazione Winsock
     iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (iResult != 0) {
         printf("WSAStartup failed with error: %d\n", iResult);
@@ -54,6 +63,7 @@ int __cdecl main(int argc, char** argv)
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
+    // Risoluzione indirizzo server e porta
     iResult = getaddrinfo(address, DEFAULT_PORT, &hints, &result);
     if (iResult != 0) {
         printf("getaddrinfo failed with error: %d\n", iResult);
@@ -61,6 +71,7 @@ int __cdecl main(int argc, char** argv)
         return 1;
     }
 
+    // Tentativo di connessione all'indirizzo finchè non è instaurata
     for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
 
         ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype,
@@ -71,6 +82,7 @@ int __cdecl main(int argc, char** argv)
             return 1;
         }
 
+        // Connessione
         iResult = connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
         if (iResult == SOCKET_ERROR) {
             closesocket(ConnectSocket);
@@ -82,22 +94,28 @@ int __cdecl main(int argc, char** argv)
 
     freeaddrinfo(result);
 
+    // Errore connessione socket
     if (ConnectSocket == INVALID_SOCKET) {
         printf("Unable to connect to server!\n");
         WSACleanup();
         return 1;
     }
-
+      
+    // Inizio loop infinito ogni 2 sec rinizia 
     do {
+        // Get HTTP sull'api del nostro server Node locale "Connection" che ci permette di comunicare col database Cloud Firestore
         std::cout << "Action: Retrieve all commands" << std::endl;
         auto r = cpr::Get(cpr::Url{ "http://localhost:8080/api/commands" });
 
+        // Attraverso l'api otteniamo dal database Cloud Firestore tutti i nuovi comandi in formato .json
         json data = nlohmann::json::parse(r.text);
 
+        // Ciclo sulla coda dei comandi
         for (auto& elm : data.items())
         {
             nlohmann::json object = elm.value();
 
+            // Composizione del comando da inviare attraverso la socket
             string cmd_s = object["cmd"];
             string len_s = object["len"];
             string pos_s = object["pos"];
@@ -118,6 +136,7 @@ int __cdecl main(int argc, char** argv)
             int bytes_to_send = sizeof(sendbuf);
             int bytes_sent = 0;
 
+            // Composizione .json file per fare l'update dello stato done da false a true sul database
             json my_json;
             my_json["id"] = id_cmd_s;
             my_json["cmd"]= cmd_s;
@@ -127,6 +146,7 @@ int __cdecl main(int argc, char** argv)
             my_json["response"]= "";
             my_json["user"]= user_s;
 
+            // Ciclo di invio del singolo comando 
             do
             {
                 n = iResult = send(ConnectSocket, (char*)sendbuf + bytes_sent, bytes_to_send - bytes_sent, 0);
@@ -137,17 +157,19 @@ int __cdecl main(int argc, char** argv)
                     WSACleanup();
                     return 1;
                 }
-                bytes_sent += n;
-                std::cout << "Action: Update Command with Id = "+ id_cmd_s << std::endl;
-                auto p = cpr::Put(cpr::Url{ "http://localhost:8080/api/command/" + id_cmd_s },
-                    cpr::Body{ my_json.dump() },
-                    cpr::Header{ { "Content-Type", "application/json" } });
-                std::cout << "Returned Status:" << p.status_code << std::endl;
+                bytes_sent += n;         
             } while (bytes_sent < bytes_to_send);
+
+            // Attraverso l'api del server "Connection" facciamo l'update con richiesta Put HTTP passando il .json "my_json" composto in precedenza
+            std::cout << "Action: Update Command with Id = " + id_cmd_s << std::endl;
+            auto p = cpr::Put(cpr::Url{ "http://localhost:8080/api/command/" + id_cmd_s },
+                cpr::Body{ my_json.dump() },
+                cpr::Header{ { "Content-Type", "application/json" } });
+            std::cout << "Returned Status:" << p.status_code << std::endl;
         }
 
         Sleep(2000);
-    } while (1);
+    } while (1); 
 
     //Nel caso ricevere i dati quando facciamo richiesta cmd=0x30 e per chiudere la socket usare questo codice
 
